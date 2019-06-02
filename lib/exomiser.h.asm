@@ -19,4 +19,8 @@
 .EXO_zp_dest_lo	SKIP 1	; dest addr lo
 .EXO_zp_dest_bi	SKIP 1	; dest addr hi
 
-
+INLINE_GET_CRUNCHED_BYTE=0
+IF INLINE_GET_CRUNCHED_BYTE
+.EXO_zp_src_ptr_lo	SKIP 1	; src addr lo
+.EXO_zp_src_ptr_hi	SKIP 1	; src addr hi
+ENDIF

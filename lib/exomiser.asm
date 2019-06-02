@@ -2,7 +2,10 @@
 \ ******************************************************************
 \ *	Exomiser (decompression library)
 \ ******************************************************************
-
+EXO_65C02=FALSE
+IF EXO_65C02
+	CPU 1
+ENDIF
 .exo_start
 
 \ ******************************************************************
@@ -33,6 +36,23 @@ exo_tabl_hi = exo_tabl_bi + 104
 ; for this exo_get_crunched_byte routine to work the crunched data has to be
 ; crunced using the -m <buffersize> and possibly the -l flags. Any other
 ; flag will just mess things up.
+IF INLINE_GET_CRUNCHED_BYTE
+IF EXO_65C02=0
+ERROR "Nope"
+ENDIF	
+EXO_crunch_byte_lo = EXO_zp_src_ptr_lo
+EXO_crunch_byte_hi = EXO_zp_src_ptr_hi
+MACRO get_crunched_byte
+{
+	lda (EXO_zp_src_ptr_lo)
+	inc EXO_zp_src_ptr_lo
+	bne _nocarry
+	inc EXO_zp_src_ptr_hi
+._nocarry
+}
+ENDMACRO
+ELSE
+	
 .exo_get_crunched_byte
 {
 
@@ -49,14 +69,26 @@ _byte_hi = _byte + 2
 
 	rts						; decrunch_file is called.
 }
-
-; -------------------------------------------------------------------
-
-
 EXO_crunch_byte_lo = exo_get_crunched_byte + 1
 EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 
-
+MACRO get_crunched_byte
+	jsr exo_get_crunched_byte
+ENDMACRO
+ENDIF
+	
+; -------------------------------------------------------------------
+	
+MACRO exo_bit_get_bit1
+{	
+	lsr EXO_zp_bitbuf
+	bne _bit_ok
+	get_crunched_byte
+	ror a
+	sta EXO_zp_bitbuf
+._bit_ok
+}
+ENDMACRO
 
 ; -------------------------------------------------------------------
 ; jsr this label to init the decruncher, it will init used zeropage
@@ -70,7 +102,7 @@ EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 	stx EXO_crunch_byte_lo
 	sty EXO_crunch_byte_hi
 
-	jsr exo_get_crunched_byte
+	get_crunched_byte
 	sta EXO_zp_bitbuf
 
 	ldx #0
@@ -123,20 +155,8 @@ EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 ; -------------------------------------------------------------------
 ; decrunch one byte
 ;
-.exo_get_decrunched_byte
-{
-	ldy EXO_zp_len_lo
-	bne _do_sequence
-	ldx EXO_zp_len_hi
-	bne _do_sequence2
 
-	jsr exo_bit_get_bit1
-	beq _get_sequence
-; -------------------------------------------------------------------
-; literal handling (13 bytes)
-;
-	jsr exo_get_crunched_byte
-	bcc _do_literal
+{
 ; -------------------------------------------------------------------
 ; count zero bits + 1 to get length table index (10 bytes)
 ; y = x = 0 when entering
@@ -144,10 +164,35 @@ EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 ._get_sequence
 ._seq_next1
 	iny
-	jsr exo_bit_get_bit1
-	beq _seq_next1
+	exo_bit_get_bit1
+	bcc _seq_next1
 	cpy #$11
-	bcs _do_exit
+	bcc _seq2
+	rts
+.*exo_get_decrunched_byte
+	ldy EXO_zp_len_lo
+IF 0
+	beq _not_do_sequence
+	jmp _do_sequence
+._not_do_sequence
+ELSE	
+	bne _do_sequence
+ENDIF
+	ldx EXO_zp_len_hi
+	bne _do_sequence2
+
+	exo_bit_get_bit1
+	bcc _get_sequence
+; -------------------------------------------------------------------
+; literal handling (13 bytes)
+;	
+	get_crunched_byte
+IF 0
+	jmp _do_literal
+ELSE
+	bcs _do_literal ; always
+ENDIF
+._seq2
 ; -------------------------------------------------------------------
 ; calulate length of sequence (zp_len) (17 bytes)
 ;
@@ -177,7 +222,7 @@ EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 ; calulate absolute offset (zp_src) (27 bytes)
 ;
 	ldx exo_tabl_bi,y
-	jsr exo_bit_get_bits;
+	jsr exo_bit_get_bits
 	adc exo_tabl_lo,y
 	bcc _seq_skipcarry
 	inc EXO_zp_bits_hi
@@ -199,7 +244,9 @@ EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 	adc #HI(EXO_buffer_start)
 	sta EXO_zp_src_bi
 ._do_sequence
+IF EXO_65C02=0
 	ldy #0
+ENDIF
 ._do_sequence2
 	ldx EXO_zp_len_lo
 	bne _seq_len_dec_lo
@@ -212,10 +259,18 @@ EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 	ldx EXO_zp_src_hi
 	bne _seq_src_dec_hi
 ; ------- handle buffer wrap problematics here ----------------------
+IF 1
+	ldx #HI(EXO_buffer_len-$100)
+	stx EXO_zp_src_hi
+	ldx #HI(EXO_buffer_end-$100)
+	stx EXO_zp_src_bi
+	bne _seq_src_dec_lo ; always
+ELSE
 	ldx #HI(EXO_buffer_len)
 	stx EXO_zp_src_hi
 	ldx #HI(EXO_buffer_end)
 	stx EXO_zp_src_bi
+ENDIF
 ; -------------------------------------------------------------------
 ._seq_src_dec_hi
 	dec EXO_zp_src_hi
@@ -223,7 +278,11 @@ EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 ._seq_src_dec_lo
 	dec EXO_zp_src_lo
 ; -------------------------------------------------------------------
+IF EXO_65C02
+	lda (EXO_zp_src_lo)
+ELSE
 	lda (EXO_zp_src_lo),y
+ENDIF
 ; -------------------------------------------------------------------
 ._do_literal
 	ldx EXO_zp_dest_lo
@@ -231,10 +290,18 @@ EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 	ldx EXO_zp_dest_hi
 	bne _seq_dest_dec_hi
 ; ------- handle buffer wrap problematics here ----------------------
+IF 1
+	ldx #HI(EXO_buffer_len-$100)
+	stx EXO_zp_dest_hi
+	ldx #HI(EXO_buffer_end-$100)
+	stx EXO_zp_dest_bi
+	bne _seq_dest_dec_lo ; always
+ELSE
 	ldx #HI(EXO_buffer_len)
 	stx EXO_zp_dest_hi
 	ldx #HI(EXO_buffer_end)
 	stx EXO_zp_dest_bi
+ENDIF
 ; -------------------------------------------------------------------
 ._seq_dest_dec_hi
 	dec EXO_zp_dest_hi
@@ -242,7 +309,11 @@ EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 ._seq_dest_dec_lo
 	dec EXO_zp_dest_lo
 ; -------------------------------------------------------------------
+IF EXO_65C02
+	sta (EXO_zp_dest_lo)
+ELSE
 	sta (EXO_zp_dest_lo),y
+ENDIF
 	clc
 	rts
 }
@@ -259,11 +330,13 @@ EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 	EQUB 48,32,16
 }
 
+IF 0
 ; -------------------------------------------------------------------
 ; get x + 1 bits (1 byte)
 ;
 .exo_bit_get_bit1
 	inx
+ENDIF
 ; -------------------------------------------------------------------
 ; get bits (31 bytes)
 ;
@@ -281,16 +354,23 @@ EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 ; -------------------------------------------------------------------
 .exo_bit_get_bits
 {
+IF EXO_65C02
+	stz EXO_zp_bits_lo
+	stz EXO_zp_bits_hi
+	beq _bit_bits_done2
+ELSE
+	beq _bit_bits_done2
 	lda #$00
 	sta EXO_zp_bits_lo
 	sta EXO_zp_bits_hi
-	cpx #$01
-	bcc _bit_bits_done
+ENDIF
+	;cpx #$01
+	;bcc _bit_bits_done
 	lda EXO_zp_bitbuf
 ._bit_bits_next
 	lsr a
 	bne _bit_ok
-	jsr exo_get_crunched_byte
+	get_crunched_byte
 	ror a
 ._bit_ok
 	rol EXO_zp_bits_lo
@@ -301,7 +381,51 @@ EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 	lda EXO_zp_bits_lo
 ._bit_bits_done
 	rts
+._bit_bits_done2
+	lda #$00
+IF EXO_65C02=0
+	sta EXO_zp_bits_lo
+	sta EXO_zp_bits_hi
+ENDIF
+	rts
+
 }
+
+IF 0
+.exo_bit_get_bit1_worko
+{
+	stz EXO_zp_bits_lo
+	lda EXO_zp_bitbuf
+._bit_bits_next
+	lsr a
+	bne _bit_ok
+	jsr exo_get_crunched_byte
+	ror a
+._bit_ok
+	sta EXO_zp_bitbuf
+	rol EXO_zp_bits_lo
+	;rol EXO_zp_bits_hi
+	dex
+	bpl _bit_bits_next
+	lda EXO_zp_bits_lo
+._bit_bits_done
+	rts
+}
+
+.exo_bit_get_bit1_worko2
+{
+	lsr EXO_zp_bitbuf
+	bne _bit_ok
+	jsr exo_get_crunched_byte
+	ror a
+	sta EXO_zp_bitbuf
+._bit_ok
+	lda #0
+	rol a
+._bit_bits_done
+	rts
+}
+ENDIF
 ; -------------------------------------------------------------------
 ; end of decruncher
 ; -------------------------------------------------------------------
