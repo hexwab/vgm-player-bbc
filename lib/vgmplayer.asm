@@ -5,7 +5,7 @@
 
 VGM_ENABLE_AUDIO = TRUE		; enables output to sound chip (disable for silent testing/demo loop)
 VGM_HAS_HEADER = FALSE		; set this to TRUE if the VGM bin file contains a metadata header (only useful for sound tracker type demos where you want to have the song info)  
-VGM_FX = TRUE			; set this to TRUE to parse the music into vu-meter type buffers for effect purposes
+VGM_FX = FALSE			; set this to TRUE to parse the music into vu-meter type buffers for effect purposes
 VGM_DEINIT = FALSE		; set this to TRUE to silence the sound chip at tune end (if the tune doesn't do it itself)
 VGM_FRAME_COUNT = FALSE		; set this to TRUE to keep a count of audio frames played
 VGM_END_ALLOWED = FALSE		; set this to TRUE to permit vgm_poll_player to be called after the tune has finished
@@ -304,7 +304,7 @@ ENDIF
 IF VGM_ENABLE_AUDIO
 	ldy #255
 	sty $fe43
-	sta $fe4f
+	sta $fe4f ; not $fe41!
 IF VGM_65C02
 	stz $fe40
 ELSE
@@ -314,7 +314,7 @@ ENDIF
 	pha
 	pla ; 7 cycles, 2 bytes
 	lda #$08
-	sta $fe40
+	sta $fe40 ;4+3+2+4+1(stretched)=14*2=28 PSG cycles ~WE was held low
 ENDIF ; VGM_ENABLE_AUDIO
 	rts
 }
@@ -362,7 +362,7 @@ IF VGM_ENABLE_AUDIO
 ENDIF
 .sound_data_loop
 IF VGM_ENABLE_AUDIO
-	sta $fe40
+	sta $fe40 ; 2+6+3+4+1(stretched)=16*2=32 PSG clock cycles ~WE was held low
 ENDIF
 ._first	jsr exo_get_decrunched_byte
 	; if C is not clear here something's gone terribly wrong
@@ -370,7 +370,7 @@ IF VGM_FX
 	JSR psg_decode
 ENDIF
 IF VGM_ENABLE_AUDIO
-	sta $fe4f
+	sta $fe4f ; not $fe41!
 IF VGM_65C02
 	stz $fe40
 ELSE
@@ -381,8 +381,10 @@ ENDIF
 ENDIF ; VGM_ENABLE_AUDIO
 	dec vgm_player_count
 	bne sound_data_loop
-	
-	sta $fe40
+	clc
+IF VGM_ENABLE_AUDIO
+	sta $fe40 ; 2+6+2+4+2=16*2=32 PSG clock cycles ~WE was held low
+ENDIF
 .wait_20_ms
 IF VGM_FRAME_COUNT
 	INC vgm_player_counter	; indicate we have completed another frame of audio
@@ -390,12 +392,6 @@ IF VGM_FRAME_COUNT
 	INC vgm_player_counter+1
 .no_carry
 	CLC
-ELSE
-IF VGM_FX
-	CLC
-ELSE
-	; C is always clear here
-ENDIF
 ENDIF
 IF (VGM_EXO_EOF=0) OR VGM_END_ALLOWED OR VGM_FRAME_COUNT OR VGM_DEINIT
 	RTS

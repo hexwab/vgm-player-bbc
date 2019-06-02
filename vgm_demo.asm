@@ -12,7 +12,7 @@ INCLUDE "lib/exomiser.asm"
 INCLUDE "lib/vgmplayer.asm"
 INCLUDE "lib/irq.asm"
 
-LOOP = FALSE
+LOOP = TRUE
 
 .event_handler
 {
