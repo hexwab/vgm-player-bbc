@@ -3,9 +3,7 @@
 \ *	Exomiser (decompression library)
 \ ******************************************************************
 
-
 .exo_start
-
 
 \ ******************************************************************
 \ *	Space reserved for runtime buffers not preinitialised
@@ -16,13 +14,8 @@
 \\ where 1024 is the compression buffer size as below
 \\ A larger buffer gives better compression.
 
-EXO_buffer_len = 1024			\\ this must match the parameter -m
-
 \\ Exomiser unpack buffer (must be page aligned)
-\\ Can be relocated as needed
-ALIGN 256
-.EXO_buffer_start SKIP EXO_buffer_len
-.EXO_buffer_end
+EXO_buffer_end = EXO_buffer_start + EXO_buffer_len
 
 ; -------------------------------------------------------------------
 ; this 156 byte table area may be relocated. It may also be clobbered
@@ -30,31 +23,10 @@ ALIGN 256
 ; -------------------------------------------------------------------
 
 EXO_TABL_SIZE = 156
-.exo_tabl_bi SKIP EXO_TABL_SIZE
+exo_tabl_bi = EXO_table
 
 exo_tabl_lo = exo_tabl_bi + 52
 exo_tabl_hi = exo_tabl_bi + 104
-
-
-; -------------------------------------------------------------------
-; Unpack a compressed data stream previously initialized by exo_init_decruncher
-; to the memory address specified in X,Y
-.exo_unpack
-{
-	STX write_chr+1
-	STY write_chr+2
-
-	.next_chr
-	JSR exo_get_decrunched_byte
-	BCS all_done
-	.write_chr	STA &ffff				; **SELF-MODIFIED**
-	INC write_chr+1
-	BNE next_chr
-	INC write_chr+2
-	BNE next_chr
-	.all_done
-	RTS
-}
 
 ; -------------------------------------------------------------------
 ; Fetch byte from an exomiser compressed data stream
@@ -334,6 +306,4 @@ EXO_crunch_byte_hi = exo_get_crunched_byte + 2
 ; end of decruncher
 ; -------------------------------------------------------------------
 
-
 .exo_end
-

@@ -3,12 +3,20 @@
 \\ Code module
 \ ******************************************************************
 
-VGM_ENABLE_AUDIO = TRUE				; enables output to sound chip (disable for silent testing/demo loop)
-VGM_HAS_HEADER = FALSE				; set this to TRUE if the VGM bin file contains a metadata header (only useful for sound tracker type demos where you want to have the song info)  
-VGM_FX = FALSE						; set this to TRUE to parse the music into vu-meter type buffers for effect purposes
+VGM_ENABLE_AUDIO = TRUE		; enables output to sound chip (disable for silent testing/demo loop)
+VGM_HAS_HEADER = FALSE		; set this to TRUE if the VGM bin file contains a metadata header (only useful for sound tracker type demos where you want to have the song info)  
+VGM_FX = TRUE			; set this to TRUE to parse the music into vu-meter type buffers for effect purposes
+VGM_DEINIT = FALSE		; set this to TRUE to silence the sound chip at tune end (if the tune doesn't do it itself)
+VGM_FRAME_COUNT = FALSE		; set this to TRUE to keep a count of audio frames played
+VGM_END_ALLOWED = FALSE		; set this to TRUE to permit vgm_poll_player to be called after the tune has finished
+VGM_EXO_EOF = FALSE		; no FF byte at the end; rely on exo to tell us when the tune ends
+VGM_65C02 = FALSE		; use 65C02 opcodes
 
 .vgm_player_start
 
+IF VGM_65C02
+	CPU 1
+ENDIF
 
 \ ******************************************************************
 \ *	Define global constants
@@ -30,25 +38,31 @@ VGM_FX_num_channels = 4				; number of beat bars (one per channel)
 .vgm_chan_array				SKIP VGM_FX_num_channels
 .vgm_player_reg_vals		SKIP 8		; data values passed to each channel during audio playback (4x channels x pitch + volume)
 
+.vgm_player_last_reg		SKIP 1		; last channel (register) refered to by the VGM sound data
+.vgm_player_reg_bits		SKIP 1		; bits 0 - 7 set if SN register 0 - 7 updated this frame, cleared at start of player poll
+.vgm_tmp			SKIP 1		; temporary counter
+ENDIF ; VGM_FX
+
+IF VGM_HAS_HEADER
 \\ Copied out of the RAW VGM header
 .vgm_player_packet_count	SKIP 2		; number of packets
 .vgm_player_duration_mins	SKIP 1		; song duration (mins)
 .vgm_player_duration_secs	SKIP 1		; song duration (secs)
 
 .vgm_player_packet_offset	SKIP 1		; offset from start of file to beginning of packet data
+ENDIF
 
-.vgm_player_last_reg		SKIP 1		; last channel (register) refered to by the VGM sound data
-.vgm_player_reg_bits		SKIP 1		; bits 0 - 7 set if SN register 0 - 7 updated this frame, cleared at start of player poll
-
-ENDIF ; VGM_FX
-
+IF VGM_END_ALLOWED
 \\ Player vars
 .vgm_player_ended			SKIP 1		; non-zero when player has reached end of tune
+ENDIF
+IF VGM_FX
 .vgm_player_data			SKIP 1		; temporary variable when decoding sound data - must be separate as player running on events
+ENDIF
+.vgm_player_count			SKIP 1		; temporary counter
+IF VGM_FRAME_COUNT
 .vgm_player_counter			SKIP 2		; increments by 1 every poll (20ms) - used as our tracker line no. & to sync fx with audio update
-
-.vgm_player_counter_tmp     SKIP 1
-
+ENDIF
 
 \ ******************************************************************
 \ *	VGM music player data area
@@ -69,13 +83,10 @@ VGM_PLAYER_sample_rate = 50			; locked to 50Hz
 ENDIF
 
 
-.tmp_var SKIP 1
-
-
-
-
+IF VGM_FX
 .num_to_bit				; look up bit N
 EQUB &01, &02, &04, &08, &10, &20, &40, &80
+ENDIF
 
 \ ******************************************************************
 \ *	VGM music player routines
@@ -91,15 +102,13 @@ EQUB &01, &02, &04, &08, &10, &20, &40, &80
 	JSR exo_init_decruncher
 
 	\\ Initialise music player - parses header
-	JSR	vgm_init_player
-
-	RTS
+	; fall through
 }
 
-
-.vgm_init_player				; return non-zero if error
+.vgm_init_player
 {
 IF VGM_HAS_HEADER
+	; non-zero return in A on error only if VGM_HAS_HEADER is defined
 \\ <header section>
 \\  [byte] - header size - indicates number of bytes in header section
 
@@ -107,7 +116,7 @@ IF VGM_HAS_HEADER
 	STA vgm_player_packet_offset
 
 	jsr exo_get_decrunched_byte
-	STA tmp_var
+	STA vgm_player_count
 	CMP #5
 	BCS parse_header			; we need at least 5 bytes to parse!
 	JMP error
@@ -124,25 +133,25 @@ IF VGM_HAS_HEADER
 	BEQ is_50HZ					; return non-zero to indicate error
 	JMP error
 	.is_50HZ
-	DEC tmp_var
+	DEC vgm_player_count
 
 \\  [byte] - packet count lsb
 
 	jsr exo_get_decrunched_byte		; should really check carry status for EOF
 	STA vgm_player_packet_count
-	DEC tmp_var
+	DEC vgm_player_count
 
 \\  [byte] - packet count msb
 
 	jsr exo_get_decrunched_byte		; should really check carry status for EOF
 	STA vgm_player_packet_count+1
-	DEC tmp_var
+	DEC vgm_player_count
 
 \\  [byte] - duration minutes
 
 	jsr exo_get_decrunched_byte		; should really check carry status for EOF
 	STA vgm_player_duration_mins
-	DEC tmp_var
+	DEC vgm_player_count
 
 \\  [byte] - duration seconds
 
@@ -150,7 +159,7 @@ IF VGM_HAS_HEADER
 	STA vgm_player_duration_secs
 
 	.header_loop
-	DEC tmp_var
+	DEC vgm_player_count
 	BEQ done_header
 
 	jsr exo_get_decrunched_byte		; should really check carry status for EOF
@@ -165,7 +174,7 @@ IF VGM_HAS_HEADER
 	INC vgm_player_packet_offset
 
 	jsr exo_get_decrunched_byte		; should really check carry status for EOF
-	STA tmp_var
+	STA vgm_player_count
 
 	CLC
 	ADC vgm_player_packet_offset
@@ -176,9 +185,9 @@ IF VGM_HAS_HEADER
 	LDX #0
 	.title_loop
 	STX tmp_msg_idx
-	LDA tmp_var
+	LDA vgm_player_count
 	BEQ done_title				; make sure we consume all the title string
-	DEC tmp_var
+	DEC vgm_player_count
 
 	jsr exo_get_decrunched_byte		; should really check carry status for EOF
 	LDX tmp_msg_idx
@@ -206,7 +215,7 @@ IF VGM_HAS_HEADER
 	INC vgm_player_packet_offset
 
 	jsr exo_get_decrunched_byte		; should really check carry status for EOF
-	STA tmp_var
+	STA vgm_player_count
 
 	CLC
 	ADC vgm_player_packet_offset
@@ -217,9 +226,9 @@ IF VGM_HAS_HEADER
 	LDX #0
 	.author_loop
 	STX tmp_msg_idx
-	LDA tmp_var
+	LDA vgm_player_count
 	BEQ done_author				; make sure we consume all the author string
-	DEC tmp_var
+	DEC vgm_player_count
 
 	jsr exo_get_decrunched_byte		; should really check carry status for EOF
 	LDX tmp_msg_idx
@@ -243,48 +252,89 @@ IF VGM_HAS_HEADER
 ENDIF ;VGM_HAS_HEADER
 
 	\\ Initialise vars
+IF VGM_FRAME_COUNT
 	LDA #&FF
 	STA vgm_player_counter
 	STA vgm_player_counter+1
-
+ENDIF
+IF VGM_END_ALLOWED
+IF VGM_65C02
+	STZ vgm_player_ended
+ELSE
 	LDA #0
 	STA vgm_player_ended
+ENDIF
+ENDIF
 IF VGM_FX
+IF VGM_65C02
+	STZ vgm_player_last_reg
+	STZ vgm_player_reg_bits
+ELSE
+	LDA #0
 	STA vgm_player_last_reg
 	STA vgm_player_reg_bits
+ENDIF
 ENDIF
 	\\ Return zero 
 	RTS
 
+IF VGM_HAS_HEADER
 	\\ Return error
-	.error
+.error
 	LDA #&FF
 	RTS
+ENDIF
 }
 
+IF VGM_DEINIT
 .vgm_deinit_player
 {
 	\\ Zero volume on all channels
 	LDA #&9F: JSR psg_strobe
 	LDA #&BF: JSR psg_strobe
 	LDA #&DF: JSR psg_strobe
-	LDA #&FF: JSR psg_strobe
-	
-	.return
-	RTS
+	LDA #&FF
+IF VGM_END_ALLOWED	
+	STA vgm_player_ended
+ENDIF
+	; fall-through
 }
+.psg_strobe
+{
+IF VGM_ENABLE_AUDIO
+	ldy #255
+	sty $fe43
+	sta $fe4f
+IF VGM_65C02
+	stz $fe40
+ELSE
+	lda #0
+	sta $fe40
+ENDIF
+	pha
+	pla ; 7 cycles, 2 bytes
+	lda #$08
+	sta $fe40
+ENDIF ; VGM_ENABLE_AUDIO
+	rts
+}
+ENDIF
 
+\\ call every 20ms with interrupts disabled
 .vgm_poll_player
 {
-	\\ Assume this is called every 20ms..
 IF VGM_FX
+IF VGM_65C02
+	STZ vgm_player_reg_bits
+ELSE
 	LDA #0
 	STA vgm_player_reg_bits
 ENDIF
-
+ENDIF
+IF VGM_END_ALLOWED
 	LDA vgm_player_ended
 	BNE _sample_end
-
+ENDIF
 \\ <packets section>
 \\  [byte] - indicating number of data writes within the current packet (max 11)
 \\  [dd] ... - data
@@ -296,76 +346,79 @@ ENDIF
 
 	\\ Get next byte from the stream
 	jsr exo_get_decrunched_byte
-	bcs _sample_end
-
-	cmp #&ff
-	beq _player_end
+	bcs _player_end ; exo stream done?
+	tay ; set flags
+	beq wait_20_ms
+IF VGM_EXO_EOF=0
+	bmi _player_end
+ENDIF
+	ldy #255
+	sty $fe43
 
 	\\ Byte is #data bytes to send to sound chip:
-	TAY
-	.sound_data_loop
-	BEQ wait_20_ms
-	TYA:PHA
-	jsr exo_get_decrunched_byte
-	bcc not_sample_end
-	PLA
-	JMP _sample_end
-
-	.not_sample_end
+	sta vgm_player_count
+IF VGM_ENABLE_AUDIO
+	bne _first ; always
+ENDIF
+.sound_data_loop
+IF VGM_ENABLE_AUDIO
+	sta $fe40
+ENDIF
+._first	jsr exo_get_decrunched_byte
+	; if C is not clear here something's gone terribly wrong
 IF VGM_FX
 	JSR psg_decode
 ENDIF
-	JSR psg_strobe
-	PLA:TAY:DEY
-	JMP sound_data_loop
-	
-	.wait_20_ms
-	INC vgm_player_counter				; indicate we have completed another frame of audio
-	BNE no_carry
-	INC vgm_player_counter+1
-	.no_carry
-
-	CLC
-	RTS
-
-	._player_end
-	STA vgm_player_ended
-
-	\\ Silence sound chip
-	JSR vgm_deinit_player
-
-	INC vgm_player_counter				; indicate we have completed one last frame of audio
-	BNE _sample_end
-	INC vgm_player_counter+1
-
-	._sample_end
-	SEC
-	RTS
-}
-
-.psg_strobe
-{
-
 IF VGM_ENABLE_AUDIO
-
-	ldy #255
-	sty $fe43
-	
-	sta $fe41
+	sta $fe4f
+IF VGM_65C02
+	stz $fe40
+ELSE
 	lda #0
 	sta $fe40
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
+ENDIF
 	lda #$08
-	sta $fe40
-
 ENDIF ; VGM_ENABLE_AUDIO
-
-	rts
+	dec vgm_player_count
+	bne sound_data_loop
+	
+	sta $fe40
+.wait_20_ms
+IF VGM_FRAME_COUNT
+	INC vgm_player_counter	; indicate we have completed another frame of audio
+	BNE no_carry
+	INC vgm_player_counter+1
+.no_carry
+	CLC
+ELSE
+IF VGM_FX
+	CLC
+ELSE
+	; C is always clear here
+ENDIF
+ENDIF
+IF (VGM_EXO_EOF=0) OR VGM_END_ALLOWED OR VGM_FRAME_COUNT OR VGM_DEINIT
+	RTS
+ENDIF
+._player_end
+IF VGM_DEINIT
+	\\ Silence sound chip
+	JSR vgm_deinit_player
+ELSE
+IF VGM_END_ALLOWED
+	STA vgm_player_ended
+ENDIF
+ENDIF
+IF VGM_FRAME_COUNT
+	INC vgm_player_counter	; indicate we have completed one last frame of audio
+	BNE _sample_end
+	INC vgm_player_counter+1
+ENDIF
+._sample_end
+IF (VGM_EXO_EOF=0) OR VGM_END_ALLOWED OR VGM_FRAME_COUNT
+	SEC
+ENDIF
+	RTS
 }
 
 IF VGM_FX
@@ -435,12 +488,12 @@ IF VGM_FX
 	LDA #9
 	STA vgm_chan_array, Y
 
-	JMP return
+	BNE return ; always
 
 	.second_byte
 	LDA vgm_player_data
 	AND #&3F; SN_FREQ_SECOND_BYTE_MASK		; F9 - F4
-	STA tmp_var
+	STA vgm_tmp
 	ASL A: ASL A						; put 6 bits to top of byte
 	LDY vgm_player_last_reg
 	ORA vgm_player_reg_vals,Y				; combine with bottom 2 bits
@@ -452,7 +505,7 @@ IF VGM_FX
 ;	LDA #9
 ;	STA vgm_chan_array, Y
 
-	LDA tmp_var
+	LDA vgm_tmp
 IF VGM_FX_num_freqs == 16
 	\\ 16 frequency bars, so use top 4 bits
 	LSR A : LSR A
@@ -463,15 +516,15 @@ ENDIF
 	
 	\\ clamp final frequency to array range and invert 
 	AND #VGM_FX_num_freqs-1
-	STA tmp_var
+	STA vgm_tmp
 	LDA #VGM_FX_num_freqs-1
 	SEC
-	SBC tmp_var
+	SBC vgm_tmp
 	TAX
 	LDA #15
 	STA vgm_freq_array,X
 
-	.return
+.return
 	LDA vgm_player_data
 	RTS
 }
